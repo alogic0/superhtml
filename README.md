@@ -114,6 +114,39 @@ After:
 ### Download
 See the Releases section here on GitHub.
 
+### Lightweight tokenizer modules
+
+Library consumers that only need syntax tokenization can configure the package
+without SuperHTML's CLI, LSP, VM, Scripty, Tracy, or generated language registry:
+
+```zig
+const superhtml = b.dependency("superhtml", .{
+    .target = target,
+    .optimize = optimize,
+    .tokenizers_only = true,
+});
+
+app.root_module.addImport(
+    "html-tokenizer",
+    superhtml.module("html-tokenizer"),
+);
+app.root_module.addImport(
+    "css-tokenizer",
+    superhtml.module("css-tokenizer"),
+);
+app.root_module.addImport(
+    "template-syntax",
+    superhtml.module("template-syntax"),
+);
+```
+
+The HTML tokenizer defaults to quiet operation. Set its `trace` field to
+`true` to enable per-byte debug logging. The CSS tokenizer treats comments as
+trivia by default; set `return_comments` to `true` to receive `comment` tokens.
+The `template-syntax` module exposes `directive` and `embeddedExpression` for
+locating SuperHTML directives and their embedded Scripty source without loading
+the full semantic AST.
+
 ### Editor support
 #### VSCode
 Install the [Super HTML VSCode extension](https://marketplace.visualstudio.com/items?itemName=LorisCro.super) (doesn't require the CLI tool as it bundles a WASM build of the language server).

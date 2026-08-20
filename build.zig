@@ -4,6 +4,56 @@ const zon = @import("build.zig.zon");
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const tokenizers_only = b.option(
+        bool,
+        "tokenizers_only",
+        "Expose dependency-free tokenizer modules without configuring the CLI, LSP, VM, or AST",
+    ) orelse false;
+
+    const syntax_types = b.addModule("syntax-types", .{
+        .root_source_file = b.path("src/syntax_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const html_tokenizer = b.addModule("html-tokenizer", .{
+        .root_source_file = b.path("src/html_tokenizer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "syntax-types", .module = syntax_types }},
+    });
+    const css_tokenizer = b.addModule("css-tokenizer", .{
+        .root_source_file = b.path("src/css_tokenizer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "syntax-types", .module = syntax_types }},
+    });
+    const template_syntax = b.addModule("template-syntax", .{
+        .root_source_file = b.path("src/template_syntax.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "html-tokenizer", .module = html_tokenizer }},
+    });
+
+    const tokenizer_test_step = b.step(
+        "test-tokenizers",
+        "Run dependency-free tokenizer and template syntax tests",
+    );
+    const tokenizer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tokenizer_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "html-tokenizer", .module = html_tokenizer },
+                .{ .name = "css-tokenizer", .module = css_tokenizer },
+                .{ .name = "template-syntax", .module = template_syntax },
+            },
+        }),
+    });
+    tokenizer_test_step.dependOn(&b.addRunArtifact(tokenizer_tests).step);
+
+    if (tokenizers_only) return;
+
     const enable_tracy = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
     const version = b.option(
         []const u8,
@@ -23,6 +73,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    superhtml.addImport("syntax-types", syntax_types);
     superhtml.addImport("scripty", scripty.module("scripty"));
     superhtml.addImport("tracy", tracy.module("tracy"));
 
@@ -70,6 +121,7 @@ pub fn build(b: *std.Build) !void {
 
     const check = setupCheckStep(b, target, optimize, options, superhtml, folders, lsp);
     const test_step = setupTestStep(b, superhtml, check);
+    test_step.dependOn(tokenizer_test_step);
     setupCliTool(b, target, optimize, options, superhtml, folders, lsp);
     setupWasmStep(b, optimize, options, superhtml, lsp);
     setupFetchLanguageSubtagRegistryStep(b, target);

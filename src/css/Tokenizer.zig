@@ -1,11 +1,11 @@
 const std = @import("std");
 
 const Tokenizer = @import("Tokenizer.zig");
-const root = @import("../root.zig");
-const Span = root.Span;
+const Span = @import("syntax-types").Span;
 
 idx: u32 = 0,
 current: u8 = undefined,
+return_comments: bool = false,
 
 pub const Error = enum {
     truncated_string,
@@ -36,6 +36,7 @@ pub const Token = union(enum) {
     close_paren: u32,
     open_curly: u32,
     close_curly: u32,
+    comment: Span,
     err: struct {
         tag: Error,
         span: Span,
@@ -58,6 +59,7 @@ pub const Token = union(enum) {
             .bad_url,
             .number,
             .percentage,
+            .comment,
             => |s| s,
             .dimension,
             => |d| .{ .start = d.number.start, .end = d.unit.end },
@@ -185,7 +187,7 @@ fn wouldStartNumber(self: *Tokenizer, src: []const u8) bool {
 
 // https://www.w3.org/TR/css-syntax-3/#consume-token
 pub fn next(self: *Tokenizer, src: []const u8) ?Token {
-    if (self.consume(src)) {
+    while (self.consume(src)) {
         switch (self.current) {
             '\n', '\t', ' ' => {
                 while (true) {
@@ -195,7 +197,22 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
                     } else break;
                 }
 
-                return self.next(src);
+                continue;
+            },
+            '/' => {
+                if (self.peek(src) != '*') return .{ .delim = self.idx - 1 };
+
+                const start = self.idx - 1;
+                std.debug.assert(self.consume(src));
+                while (self.consume(src)) {
+                    if (self.current == '*' and self.peek(src) == '/') {
+                        std.debug.assert(self.consume(src));
+                        break;
+                    }
+                }
+                const comment: Span = .{ .start = start, .end = self.idx };
+                if (self.return_comments) return .{ .comment = comment };
+                continue;
             },
             '"', '\'' => return self.string(src),
             '#' => {
@@ -277,9 +294,8 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
                 return .{ .delim = self.idx - 1 };
             },
         }
-    } else {
-        return null;
     }
+    return null;
 }
 
 // https://www.w3.org/TR/css-syntax-3/#consume-an-ident-sequence
@@ -412,9 +428,9 @@ fn string(self: *Tokenizer, src: []const u8) Token {
 }
 // https://www.w3.org/TR/css-syntax-3/#consume-url-token
 fn url(self: *Tokenizer, src: []const u8) Token {
-    const start = self.idx + 1;
-
+    std.debug.assert(self.consume(src) and self.current == '(');
     self.skipWhitespace(src);
+    const start = self.idx;
 
     while (self.consume(src)) {
         switch (self.current) {
@@ -441,28 +457,64 @@ fn url(self: *Tokenizer, src: []const u8) Token {
     return .{
         .err = .{
             .tag = .bad_url,
-            .span = .{ .start = start, .end = self.idx - 1 },
+            .span = .{ .start = start, .end = self.idx },
         },
     };
 }
 fn consumeBadUrl(self: *Tokenizer, src: []const u8, start: u32) Token {
+    var end: u32 = @intCast(src.len);
     while (self.consume(src)) {
-        if (self.current == ')') break;
+        if (self.current == ')') {
+            end = self.idx - 1;
+            break;
+        }
     }
     return .{
         .err = .{
             .tag = .bad_url,
-            .span = .{ .start = start, .end = self.idx - 1 },
+            .span = .{ .start = start, .end = @max(start, end) },
         },
     };
 }
 
 fn skipWhitespace(self: *Tokenizer, src: []const u8) void {
-    while (self.consume(src)) {
-        switch (self.current) {
-            '\n', '\t', ' ' => {},
-            else => return,
-        }
+    while (self.peek(src)) |c| switch (c) {
+        '\n', '\t', ' ' => std.debug.assert(self.consume(src)),
+        else => return,
+    };
+}
+
+test "comments are optional trivia tokens" {
+    const src = "a/* complete */b/* unterminated";
+
+    var skipping = Tokenizer{};
+    try std.testing.expectEqualStrings("a", skipping.next(src).?.span().slice(src));
+    try std.testing.expectEqualStrings("b", skipping.next(src).?.span().slice(src));
+    try std.testing.expectEqual(null, skipping.next(src));
+
+    var returning = Tokenizer{ .return_comments = true };
+    try std.testing.expectEqualStrings("a", returning.next(src).?.span().slice(src));
+    try std.testing.expectEqualStrings("/* complete */", returning.next(src).?.span().slice(src));
+    try std.testing.expectEqualStrings("b", returning.next(src).?.span().slice(src));
+    try std.testing.expectEqualStrings("/* unterminated", returning.next(src).?.span().slice(src));
+    try std.testing.expectEqual(null, returning.next(src));
+}
+
+test "comment markers inside strings remain string content" {
+    const src = "\"/* not a comment */\"";
+    var tokenizer = Tokenizer{ .return_comments = true };
+    try std.testing.expectEqual(Token{ .string = .{ .start = 0, .end = src.len } }, tokenizer.next(src).?);
+}
+
+test "unterminated URL has a valid span" {
+    const cases = [_][]const u8{ "url(", "url(   ", "url(value" };
+    for (cases) |src| {
+        var tokenizer = Tokenizer{};
+        const token = tokenizer.next(src).?;
+        const span = token.span();
+        try std.testing.expect(span.start <= span.end);
+        try std.testing.expect(span.end <= src.len);
+        try std.testing.expect(token == .err);
     }
 }
 

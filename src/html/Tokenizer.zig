@@ -12,15 +12,16 @@ const named_character_references = @import("named_character_references.zig");
 
 const std = @import("std");
 const assert = std.debug.assert;
-const root = @import("../root.zig");
-const Language = root.Language;
-const Span = root.Span;
+const syntax_types = @import("syntax-types");
+const Language = syntax_types.Language;
+const Span = syntax_types.Span;
 
 const log = std.log.scoped(.@"html/tokenizer");
 const form_feed = std.ascii.control_code.ff;
 
 language: Language,
 return_attrs: bool = false,
+trace: bool = false,
 idx: u32 = 0,
 current: u8 = undefined,
 state: State = .data,
@@ -414,12 +415,14 @@ fn next2(self: *Tokenizer, src: []const u8) ?struct {
     deferred: ?Token = null,
 } {
     while (true) {
-        log.debug("[{*}] char: '{c}' ({}) state {any}", .{
-            self,
-            self.current,
-            self.idx,
-            self.state,
-        });
+        if (self.trace) {
+            log.debug("[{*}] char: '{c}' ({}) state {any}", .{
+                self,
+                self.current,
+                self.idx,
+                self.state,
+            });
+        }
         switch (self.state) {
             .text => |state| {
                 if (!self.consume(src)) {
@@ -1840,7 +1843,7 @@ fn next2(self: *Tokenizer, src: []const u8) ?struct {
                                 },
                             };
 
-                            log.debug("aaaaaaa", .{});
+                            if (self.trace) log.debug("script end tag with trailing solidus", .{});
                             if (trimmedText(
                                 state.data_start,
                                 state.tag_start,
@@ -1880,10 +1883,12 @@ fn next2(self: *Tokenizer, src: []const u8) ?struct {
                         );
                         if (is_script) {
                             self.state = .data;
-                            log.debug("zzzzzz {any} '{s}'", .{
-                                tag,
-                                tag.span.slice(src),
-                            });
+                            if (self.trace) {
+                                log.debug("script end tag {any} '{s}'", .{
+                                    tag,
+                                    tag.span.slice(src),
+                                });
+                            }
                             if (trimmedText(
                                 state.data_start,
                                 state.tag_start,
